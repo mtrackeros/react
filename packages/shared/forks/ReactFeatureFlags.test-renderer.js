@@ -36,7 +36,6 @@ export const enableUseEffectEventHook = false;
 export const favorSafetyOverHydrationPerf = true;
 export const enableLegacyFBSupport = false;
 export const enableMoveBefore = false;
-export const enableFabricCompleteRootInCommitPhase = false;
 export const enableHiddenSubtreeInsertionEffectCleanup = false;
 export const enableHydrationLaneScheduling = true;
 
@@ -71,6 +70,7 @@ export const enableYieldingBeforePassive = true;
 
 export const enableThrottledScheduling = false;
 export const enableViewTransition = false;
+export const enableFastAddPropertiesInDiffing = true;
 
 // TODO: This must be in sync with the main ReactFeatureFlags file because
 // the Test Renderer's value must be the same as the one used by the

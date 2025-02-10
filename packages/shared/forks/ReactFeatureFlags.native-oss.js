@@ -30,7 +30,6 @@ export const enableAsyncIterableChildren = false;
 export const enableCPUSuspense = false;
 export const enableCreateEventHandleAPI = false;
 export const enableDO_NOT_USE_disableStrictPassiveEffect = false;
-export const enableFabricCompleteRootInCommitPhase = false;
 export const enableMoveBefore = true;
 export const enableFizzExternalRuntime = true;
 export const enableHalt = false;
@@ -72,6 +71,7 @@ export const enableYieldingBeforePassive = false;
 
 export const enableThrottledScheduling = false;
 export const enableViewTransition = false;
+export const enableFastAddPropertiesInDiffing = false;
 
 // Profiling Only
 export const enableProfilerTimer = __PROFILE__;

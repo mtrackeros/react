@@ -27,6 +27,7 @@ import {
   getViewTransitionName,
   type ViewTransitionState,
 } from './ReactFiberViewTransitionComponent';
+import type {TransitionTypes} from 'react/src/ReactTransitionType.js';
 
 import {
   enableCreateEventHandleAPI,
@@ -431,12 +432,6 @@ let workInProgressRootConcurrentErrors: Array<CapturedValue<mixed>> | null =
 // We will log them once the tree commits.
 let workInProgressRootRecoverableErrors: Array<CapturedValue<mixed>> | null =
   null;
-// This tracks named ViewTransition components that might need to find deleted
-// pairs in the snapshot phase.
-let workInProgressAppearingViewTransitions: Map<
-  string,
-  ViewTransitionState,
-> | null = null;
 
 // Tracks when an update occurs during the render phase.
 let workInProgressRootDidIncludeRecursiveRenderUpdate: boolean = false;
@@ -653,7 +648,9 @@ let pendingEffectsRemainingLanes: Lanes = NoLanes;
 let pendingEffectsRenderEndTime: number = -0; // Profiling-only
 let pendingPassiveTransitions: Array<Transition> | null = null;
 let pendingRecoverableErrors: null | Array<CapturedValue<mixed>> = null;
-let pendingViewTransitionEvents: Array<() => void> | null = null;
+let pendingViewTransitionEvents: Array<(types: Array<string>) => void> | null =
+  null;
+let pendingTransitionTypes: null | TransitionTypes = null;
 let pendingDidIncludeRenderPhaseUpdate: boolean = false;
 let pendingSuspendedCommitReason: SuspendedCommitReason = IMMEDIATE_COMMIT; // Profiling-only
 
@@ -693,6 +690,10 @@ export function getRootWithPendingPassiveEffects(): FiberRoot | null {
 
 export function getPendingPassiveEffectsLanes(): Lanes {
   return pendingEffectsLanes;
+}
+
+export function getPendingTransitionTypes(): null | TransitionTypes {
+  return pendingTransitionTypes;
 }
 
 export function isWorkLoopSuspendedOnData(): boolean {
@@ -804,7 +805,7 @@ export function requestDeferredLane(): Lane {
 
 export function scheduleViewTransitionEvent(
   fiber: Fiber,
-  callback: ?(instance: ViewTransitionInstance) => void,
+  callback: ?(instance: ViewTransitionInstance, types: Array<string>) => void,
 ): void {
   if (enableViewTransition) {
     if (callback != null) {
@@ -1311,7 +1312,6 @@ function finishConcurrentRender(
       lanes,
       workInProgressRootRecoverableErrors,
       workInProgressTransitions,
-      workInProgressAppearingViewTransitions,
       workInProgressRootDidIncludeRecursiveRenderUpdate,
       workInProgressDeferredLane,
       workInProgressRootInterleavedUpdatedLanes,
@@ -1361,7 +1361,6 @@ function finishConcurrentRender(
             finishedWork,
             workInProgressRootRecoverableErrors,
             workInProgressTransitions,
-            workInProgressAppearingViewTransitions,
             workInProgressRootDidIncludeRecursiveRenderUpdate,
             lanes,
             workInProgressDeferredLane,
@@ -1383,7 +1382,6 @@ function finishConcurrentRender(
       finishedWork,
       workInProgressRootRecoverableErrors,
       workInProgressTransitions,
-      workInProgressAppearingViewTransitions,
       workInProgressRootDidIncludeRecursiveRenderUpdate,
       lanes,
       workInProgressDeferredLane,
@@ -1403,7 +1401,6 @@ function commitRootWhenReady(
   finishedWork: Fiber,
   recoverableErrors: Array<CapturedValue<mixed>> | null,
   transitions: Array<Transition> | null,
-  appearingViewTransitions: Map<string, ViewTransitionState> | null,
   didIncludeRenderPhaseUpdate: boolean,
   lanes: Lanes,
   spawnedLane: Lane,
@@ -1435,9 +1432,9 @@ function commitRootWhenReady(
     // the suspensey resources. The renderer is responsible for accumulating
     // all the load events. This all happens in a single synchronous
     // transaction, so it track state in its own module scope.
-    if (maySuspendCommit) {
-      accumulateSuspenseyCommit(finishedWork);
-    }
+    // This will also track any newly added or appearing ViewTransition
+    // components for the purposes of forming pairs.
+    accumulateSuspenseyCommit(finishedWork);
     if (isViewTransitionEligible) {
       suspendOnActiveViewTransition(root.containerInfo);
     }
@@ -1461,7 +1458,6 @@ function commitRootWhenReady(
           lanes,
           recoverableErrors,
           transitions,
-          appearingViewTransitions,
           didIncludeRenderPhaseUpdate,
           spawnedLane,
           updatedLanes,
@@ -1485,7 +1481,6 @@ function commitRootWhenReady(
     lanes,
     recoverableErrors,
     transitions,
-    appearingViewTransitions,
     didIncludeRenderPhaseUpdate,
     spawnedLane,
     updatedLanes,
@@ -1955,7 +1950,6 @@ function prepareFreshStack(root: FiberRoot, lanes: Lanes): Fiber {
   workInProgressRootConcurrentErrors = null;
   workInProgressRootRecoverableErrors = null;
   workInProgressRootDidIncludeRecursiveRenderUpdate = false;
-  workInProgressAppearingViewTransitions = null;
 
   // Get the lanes that are entangled with whatever we're about to render. We
   // track these separately so we can distinguish the priority of the render
@@ -2293,25 +2287,6 @@ export function renderHasNotSuspendedYet(): boolean {
   // If something errored or completed, we can't really be sure,
   // so those are false.
   return workInProgressRootExitStatus === RootInProgress;
-}
-
-export function trackAppearingViewTransition(
-  instance: ViewTransitionState,
-  name: string,
-): void {
-  if (workInProgressAppearingViewTransitions === null) {
-    if (
-      !includesOnlyViewTransitionEligibleLanes(workInProgressRootRenderLanes)
-    ) {
-      return;
-    }
-    workInProgressAppearingViewTransitions = new Map();
-  }
-  // Reset the pair in case we didn't end up restoring the instance in previous commits.
-  // This could happen since we don't actually commit all tracked instances if they end
-  // up in a non-committed subtree.
-  instance.paired = null;
-  workInProgressAppearingViewTransitions.set(name, instance);
 }
 
 // TODO: Over time, this function and renderRootConcurrent have become more
@@ -3223,7 +3198,6 @@ function commitRoot(
   lanes: Lanes,
   recoverableErrors: null | Array<CapturedValue<mixed>>,
   transitions: Array<Transition> | null,
-  appearingViewTransitions: Map<string, ViewTransitionState> | null,
   didIncludeRenderPhaseUpdate: boolean,
   spawnedLane: Lane,
   updatedLanes: Lanes,
@@ -3348,9 +3322,6 @@ function commitRoot(
   pendingEffectsRemainingLanes = remainingLanes;
   pendingPassiveTransitions = transitions;
   pendingRecoverableErrors = recoverableErrors;
-  if (enableViewTransition) {
-    pendingViewTransitionEvents = null;
-  }
   pendingDidIncludeRenderPhaseUpdate = didIncludeRenderPhaseUpdate;
   if (enableProfilerTimer) {
     pendingEffectsRenderEndTime = completedRenderEndTime;
@@ -3362,10 +3333,24 @@ function commitRoot(
   // might get scheduled in the commit phase. (See #16714.)
   // TODO: Delete all other places that schedule the passive effect callback
   // They're redundant.
-  const passiveSubtreeMask =
-    enableViewTransition && includesOnlyViewTransitionEligibleLanes(lanes)
-      ? PassiveTransitionMask
-      : PassiveMask;
+  let passiveSubtreeMask;
+  if (enableViewTransition) {
+    pendingViewTransitionEvents = null;
+    if (includesOnlyViewTransitionEligibleLanes(lanes)) {
+      // Claim any pending Transition Types for this commit.
+      // This means that multiple roots committing independent View Transitions
+      // 1) end up staggered because we can only have one at a time.
+      // 2) only the first one gets all the Transition Types.
+      pendingTransitionTypes = ReactSharedInternals.V;
+      ReactSharedInternals.V = null;
+      passiveSubtreeMask = PassiveTransitionMask;
+    } else {
+      pendingTransitionTypes = null;
+      passiveSubtreeMask = PassiveMask;
+    }
+  } else {
+    passiveSubtreeMask = PassiveMask;
+  }
   if (
     // If this subtree rendered with profiling this commit, we need to visit it to log it.
     (enableProfilerTimer &&
@@ -3442,12 +3427,7 @@ function commitRoot(
       // The first phase a "before mutation" phase. We use this phase to read the
       // state of the host tree right before we mutate it. This is where
       // getSnapshotBeforeUpdate is called.
-      commitBeforeMutationEffects(
-        root,
-        finishedWork,
-        lanes,
-        appearingViewTransitions,
-      );
+      commitBeforeMutationEffects(root, finishedWork, lanes);
     } finally {
       // Reset the priority to the previous non-sync value.
       executionContext = prevExecutionContext;
@@ -3461,6 +3441,7 @@ function commitRoot(
     shouldStartViewTransition &&
     startViewTransition(
       root.containerInfo,
+      pendingTransitionTypes,
       flushMutationEffects,
       flushLayoutEffects,
       flushAfterMutationEffects,
@@ -3708,11 +3689,17 @@ function flushSpawnedWork(): void {
     // effects or spawned sync work since this is still part of the previous commit.
     // Even though conceptually it's like its own task between layout effets and passive.
     const pendingEvents = pendingViewTransitionEvents;
+    let pendingTypes = pendingTransitionTypes;
+    pendingTransitionTypes = null;
     if (pendingEvents !== null) {
       pendingViewTransitionEvents = null;
+      if (pendingTypes === null) {
+        // Normalize the type. This is lazily created only for events.
+        pendingTypes = [];
+      }
       for (let i = 0; i < pendingEvents.length; i++) {
         const viewTransitionEvent = pendingEvents[i];
-        viewTransitionEvent();
+        viewTransitionEvent(pendingTypes);
       }
     }
   }
